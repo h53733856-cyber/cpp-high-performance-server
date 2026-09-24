@@ -41,39 +41,47 @@ int main(){
         return 1;
     }
 
-    int client_fd = accept(listen_fd, nullptr, nullptr);
-    //listenfd专门监听新的客户端连接，clientfd专门和某一个已经连接的客户端通信
-    //accept(listen_fd, client_address, address_length);
-    if (client_fd == -1){
-        return 1;
-    }
-    std::cout << "client_fd = " << client_fd << std::endl;
-    //会输出4,fd 0→stdin,fd 1→stdout,fd 2→stderr,fd 3→listen_fd,fd 4→client_fd   
-    //ccept() 完成的是“连接建立后的接入”，它只给服务器一个用于和这个客户端通信的 client_fd
-    //数据是否被服务器程序读取，还需要调用 recv()
+    //v2.0加上
+    while(true){
+        int client_fd = accept(listen_fd, nullptr, nullptr);
+        //listenfd专门监听新的客户端连接，clientfd专门和某一个已经连接的客户端通信
+        //accept(listen_fd, client_address, address_length);
+        if (client_fd == -1){
+            return 1;
+        }
+        std::cout << "client_fd = " << client_fd << std::endl;
+        //会输出4,fd 0→stdin,fd 1→stdout,fd 2→stderr,fd 3→listen_fd,fd 4→client_fd   
+        //ccept() 完成的是“连接建立后的接入”，它只给服务器一个用于和这个客户端通信的 client_fd
+        //数据是否被服务器程序读取，还需要调用 recv()
 
-    char buffer[1024];
-    //在栈上申请了一块1024字节的内存空间，用来存放从客户端接收到的数据
-    int n=recv(client_fd,buffer,sizeof(buffer),0);
-    //用来从一个已经连接的 Socket 中读取接收到的数据
-    //recv返回的是这一次实际取到了多少字节，最后参数0表示按照默认方式接收
-    //n=0表示客户端关闭了连接，n<0就是发生错误了，比如recv调用失败等等
-    if (n > 0){
-        std::cout.write(buffer, n);
-    }
-    //如果不输出，终端会直接回到命令行
-    //输出的时候不能直接cout << buffer，因为对于char*，输出通常会把它当作字符串处理
-    //但是字符串要以'\0'结束，这里并没有结束标志，所以使用write，从buf开始，准确输出n个字节
-    if (n == 0){
-        close(client_fd);
-        //客户端已经关闭连接，服务器没必要再继续使用这个 client_fd 了
-    }
-    if (n < 0){
-        close(client_fd);
-    }
+        char buffer[1024];
+        //在栈上申请了一块1024字节的内存空间，用来存放从客户端接收到的数据
+        int n=recv(client_fd,buffer,sizeof(buffer),0);
+        //用来从一个已经连接的 Socket 中读取接收到的数据
+        //recv返回的是这一次实际取到了多少字节，最后参数0表示按照默认方式接收
+        //n=0表示客户端关闭了连接，n<0就是发生错误了，比如recv调用失败等等
+        if (n > 0){
+            std::cout.write(buffer, n);
+        }
+        //如果不输出，终端会直接回到命令行
+        //输出的时候不能直接cout << buffer，因为对于char*，输出通常会把它当作字符串处理
+        //但是字符串要以'\0'结束，这里并没有结束标志，所以使用write，从buf开始，准确输出n个字节
+        if (n == 0){
+            close(client_fd);
+            //客户端已经关闭连接，服务器没必要再继续使用这个 client_fd 了
+            continue;
+            //结束这一次循环
+        }
+        if (n < 0){
+            close(client_fd);
+            continue;
+        }
 
-    send(client_fd, buffer, n, 0);
-    //通过 client_fd 对应的 TCP 连接，把 buffer 中的前 n 个字节发送给客户端
-    //send(通过谁发送，发送什么，发送多少字节，flags)
+        send(client_fd, buffer, n, 0);
+        //通过 client_fd 对应的 TCP 连接，把 buffer 中的前 n 个字节发送给客户端
+        //send(通过谁发送，发送什么，发送多少字节，flags)
+        close(client_fd);
+    }
+    
     return 0;
 }
