@@ -4,9 +4,18 @@
 //socket()创建一个 Socket，并返回一个文件描述符
 #include<netinet/in.h>
 #include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#include <signal.h>
 
 
 int main(){
+
+    signal(SIGPIPE, SIG_IGN);
+    //向已经断开的TCP连接写数据可能触发SIGPIPE，默认会直接终止整个服务器进程
+    //但是我们希望关闭这个clientfd然后继续accept新的客户端
+    //这句话的意思是SIGPIPE->SIG_IGN->忽略这个信号
+
     int listen_fd=socket(AF_INET,SOCK_STREAM,0);
     //socket()创建一个 Socket，并返回一个文件描述符，listen_fd 本质上就是一个整数
     //AF_INET表示使用IPv4地址族,SOCK_STREAM表示创建一个字节流 Socket，TCP 就属于这种面向连接的字节流通信
@@ -41,7 +50,8 @@ int main(){
         return 1;
     }
 
-    //v2.0加上
+    //v2.0加上外层while：负责Server的生命周期，反复 accept()
+    //一个客户端处理完以后，继续等待下一个客户端
     while(true){
         int client_fd = accept(listen_fd, nullptr, nullptr);
         //listenfd专门监听新的客户端连接，clientfd专门和某一个已经连接的客户端通信
@@ -54,33 +64,80 @@ int main(){
         //ccept() 完成的是“连接建立后的接入”，它只给服务器一个用于和这个客户端通信的 client_fd
         //数据是否被服务器程序读取，还需要调用 recv()
 
-        char buffer[1024];
-        //在栈上申请了一块1024字节的内存空间，用来存放从客户端接收到的数据
-        int n=recv(client_fd,buffer,sizeof(buffer),0);
-        //用来从一个已经连接的 Socket 中读取接收到的数据
-        //recv返回的是这一次实际取到了多少字节，最后参数0表示按照默认方式接收
-        //n=0表示客户端关闭了连接，n<0就是发生错误了，比如recv调用失败等等
-        if (n > 0){
-            std::cout.write(buffer, n);
-        }
-        //如果不输出，终端会直接回到命令行
-        //输出的时候不能直接cout << buffer，因为对于char*，输出通常会把它当作字符串处理
-        //但是字符串要以'\0'结束，这里并没有结束标志，所以使用write，从buf开始，准确输出n个字节
-        if (n == 0){
-            close(client_fd);
-            //客户端已经关闭连接，服务器没必要再继续使用这个 client_fd 了
-            continue;
-            //结束这一次循环
-        }
-        if (n < 0){
-            close(client_fd);
-            continue;
+
+        while(true){
+            char buffer[1024];
+            //在栈上申请了一块1024字节的内存空间，用来存放从客户端接收到的数据
+            int n=recv(client_fd,buffer,sizeof(buffer),0);
+            //用来从一个已经连接的 Socket 中读取接收到的数据
+            //recv返回的是这一次实际取到了多少字节，最后参数0表示按照默认方式接收
+            //n=0表示客户端关闭了连接，n<0就是发生错误了，比如recv调用失败等等
+            if (n > 0){
+                std::cout.write(buffer, n);
+            }
+            //如果不输出，终端会直接回到命令行
+            //输出的时候不能直接cout << buffer，因为对于char*，输出通常会把它当作字符串处理
+            //但是字符串要以'\0'结束，这里并没有结束标志，所以使用write，从buf开始，准确输出n个字节
+            if (n == 0){
+                break;
+                //结束这一次循环
+            }
+            if (n < 0){
+                if (errno == EINTR) {
+                    continue;
+                }
+                std::cerr << "recv failed: " << strerror(errno) << std::endl;
+                break;
+            }
+
+            //int sent=send(client_fd, buffer, n, 0);
+                //通过 client_fd 对应的 TCP 连接，把 buffer 中的前 n 个字节发送给客户端
+                //buffer是指向第一个元素的指针
+                //send(通过谁发送，发送什么，发送多少字节，flags)
+                //close(client_fd);
+            //if(sent<0){
+                    //n表示recv这一次实际收到了多少字节
+                    //sent表示sent这一次实际发送了多少字节
+                //break;
+            //}
+
+            int total_sent = 0;
+            //表示到目前为止，已经发送了多少字节
+
+            bool send_failed = false;
+
+            while (total_sent < n) {
+
+                int sent = send(client_fd, buffer + total_sent, n - total_sent, 0);
+                //buffer+total_sent：假设第一次已经发了前600字节，下一次不能又从buffer开始发送，应该从buffer+600开始发送
+                //可以把buffer理解成指向缓冲区第一个元素的指针，然后buffer + total_sent是开始的位置
+                //n-total_sent表示正好还剩多少字节没发送
+
+                if (sent < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+
+                    std::cerr << "send failed: " << strerror(errno) << std::endl;
+                    send_failed = true;
+                    break;
+                }
+
+
+                if (sent <= 0) {
+                    send_failed = true;
+                    break;
+                }
+
+                total_sent += sent;
+            }
+            if (send_failed) {
+                break;
+            }
         }
 
-        send(client_fd, buffer, n, 0);
-        //通过 client_fd 对应的 TCP 连接，把 buffer 中的前 n 个字节发送给客户端
-        //send(通过谁发送，发送什么，发送多少字节，flags)
         close(client_fd);
+        
     }
     
     return 0;
