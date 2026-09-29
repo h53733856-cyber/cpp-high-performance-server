@@ -7,6 +7,8 @@
 #include <cerrno>
 #include <cstring>
 #include <signal.h>
+#include <sys/select.h>
+#include <vector>
 
 
 int main(){
@@ -25,6 +27,8 @@ int main(){
     {
         return 1;
     }
+
+    std::vector<int> client_fds;
 
     sockaddr_in server_addr{};
     //sockaddr_in是linux为ipv4地址提供的地址结构，{}是初始化，把成员初始化成0
@@ -53,90 +57,124 @@ int main(){
     //v2.0加上外层while：负责Server的生命周期，反复 accept()
     //一个客户端处理完以后，继续等待下一个客户端
     while(true){
-        int client_fd = accept(listen_fd, nullptr, nullptr);
+        fd_set readfds;//`readfds` 用来存放**等待读事件**的 fd
+        FD_ZERO(&readfds);//清空整个fd集合，把所有bit置0
+        FD_SET(listen_fd, &readfds);
+        //把listenfd这个监听socket加入读集合，监听这个fd的可读事件
+
+        for (int client_fd : client_fds) {
+            FD_SET(client_fd, &readfds);
+        }
+
+        int max_fd = listen_fd;
+
+        for (int client_fd : client_fds) {
+            if (client_fd > max_fd) {
+                max_fd = client_fd;
+            }
+        }
+
+        int ret = select(max_fd + 1, &readfds, nullptr, nullptr, nullptr);
+        //int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
+        //第一个参数是nfds，是最大fd值+1，select内部只会扫描0-nfds-1的bit，这里listenfd是最大fd，所以传listenfd+1
+        //readfds:监听可读事件的fd集合；select 返回时会被原地修改，只剩下发生事件的 fd
+        //writefds=nullptr：不监听可写事件
+        //exceptfds=nullptr：不监听异常事件（带外数据）
+        //timeout=nullptr：永久阻塞    ，直到有事件发生或者被信号中断
+
+        if (ret < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            std::cerr << "select failed: " << strerror(errno) << std::endl;
+            break;
+        }
+
+        //int client_fd = accept(listen_fd, nullptr, nullptr);
         //listenfd专门监听新的客户端连接，clientfd专门和某一个已经连接的客户端通信
         //accept(listen_fd, client_address, address_length);
-        if (client_fd == -1){
-            return 1;
+        
+        if (FD_ISSET(listen_fd, &readfds)) {
+            int client_fd = accept(listen_fd, nullptr, nullptr);
+
+            if (client_fd == -1) {
+                std::cerr << "accept failed: " << strerror(errno) << std::endl;
+                continue;
+            }
+
+            std::cout << "client_fd = " << client_fd << std::endl;
+                //会输出4,fd 0→stdin,fd 1→stdout,fd 2→stderr,fd 3→listen_fd,fd 4→client_fd   
+                //ccept() 完成的是“连接建立后的接入”，它只给服务器一个用于和这个客户端通信的 client_fd
+                //数据是否被服务器程序读取，还需要调用 recv()
+
+            client_fds.push_back(client_fd);
+            
         }
-        std::cout << "client_fd = " << client_fd << std::endl;
-        //会输出4,fd 0→stdin,fd 1→stdout,fd 2→stderr,fd 3→listen_fd,fd 4→client_fd   
-        //ccept() 完成的是“连接建立后的接入”，它只给服务器一个用于和这个客户端通信的 client_fd
-        //数据是否被服务器程序读取，还需要调用 recv()
 
+        for (size_t i = 0; i < client_fds.size(); ) {
+            int client_fd = client_fds[i];
 
-        while(true){
+            if (!FD_ISSET(client_fd, &readfds)) {
+                ++i;
+                continue;
+            }
+
             char buffer[1024];
-            //在栈上申请了一块1024字节的内存空间，用来存放从客户端接收到的数据
-            int n=recv(client_fd,buffer,sizeof(buffer),0);
-            //用来从一个已经连接的 Socket 中读取接收到的数据
-            //recv返回的是这一次实际取到了多少字节，最后参数0表示按照默认方式接收
-            //n=0表示客户端关闭了连接，n<0就是发生错误了，比如recv调用失败等等
-            if (n > 0){
+
+            int n = recv(client_fd, buffer, sizeof(buffer), 0);
+
+            if (n > 0) {
                 std::cout.write(buffer, n);
+
+                int total_sent = 0;
+
+                while (total_sent < n) {
+                    int sent = send(
+                        client_fd,
+                        buffer + total_sent,
+                        n - total_sent,
+                        0
+                    );
+
+                    if (sent < 0) {
+                        if (errno == EINTR) {
+                            continue;
+                        }
+
+                        std::cerr << "send failed: "
+                                << strerror(errno) << std::endl;
+                        break;
+                    }
+
+                    if (sent == 0) {
+                        break;
+                    }
+
+                    total_sent += sent;
+                }
             }
-            //如果不输出，终端会直接回到命令行
-            //输出的时候不能直接cout << buffer，因为对于char*，输出通常会把它当作字符串处理
-            //但是字符串要以'\0'结束，这里并没有结束标志，所以使用write，从buf开始，准确输出n个字节
-            if (n == 0){
-                break;
-                //结束这一次循环
+
+            else if (n == 0) {
+                close(client_fd);
+                client_fds.erase(client_fds.begin() + i);
+                continue;
             }
-            if (n < 0){
+
+            else {
                 if (errno == EINTR) {
                     continue;
                 }
-                std::cerr << "recv failed: " << strerror(errno) << std::endl;
-                break;
+
+                std::cerr << "recv failed: "
+                        << strerror(errno) << std::endl;
+
+                close(client_fd);
+                client_fds.erase(client_fds.begin() + i);
+                continue;
             }
-
-            //int sent=send(client_fd, buffer, n, 0);
-                //通过 client_fd 对应的 TCP 连接，把 buffer 中的前 n 个字节发送给客户端
-                //buffer是指向第一个元素的指针
-                //send(通过谁发送，发送什么，发送多少字节，flags)
-                //close(client_fd);
-            //if(sent<0){
-                    //n表示recv这一次实际收到了多少字节
-                    //sent表示sent这一次实际发送了多少字节
-                //break;
-            //}
-
-            int total_sent = 0;
-            //表示到目前为止，已经发送了多少字节
-
-            bool send_failed = false;
-
-            while (total_sent < n) {
-
-                int sent = send(client_fd, buffer + total_sent, n - total_sent, 0);
-                //buffer+total_sent：假设第一次已经发了前600字节，下一次不能又从buffer开始发送，应该从buffer+600开始发送
-                //可以把buffer理解成指向缓冲区第一个元素的指针，然后buffer + total_sent是开始的位置
-                //n-total_sent表示正好还剩多少字节没发送
-
-                if (sent < 0) {
-                    if (errno == EINTR) {
-                        continue;
-                    }
-
-                    std::cerr << "send failed: " << strerror(errno) << std::endl;
-                    send_failed = true;
-                    break;
-                }
-
-
-                if (sent <= 0) {
-                    send_failed = true;
-                    break;
-                }
-
-                total_sent += sent;
-            }
-            if (send_failed) {
-                break;
-            }
+            i++;
         }
-
-        close(client_fd);
         
     }
     
