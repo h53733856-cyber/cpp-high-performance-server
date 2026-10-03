@@ -14,3 +14,7 @@ add_executable(tcp_server
             src/Server.cpp
 )
     #创建一个可执行文件，并告诉 CMake，这个可执行文件由哪些源文件编译得到
+
+target_include_directories(tcp_server PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
