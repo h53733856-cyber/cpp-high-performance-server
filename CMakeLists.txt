@@ -9,10 +9,15 @@ set(CMAKE_CXX_STANDARD 17)
     #这里是告诉CMake，这个项目的源代码按照C++17的标准来编译
 
 add_executable(tcp_server 
-            src/main.cpp 
-            src/Connection.cpp
-            src/Server.cpp
+    src/main.cpp
+    src/Connection.cpp
+    src/Server.cpp
+    src/TaskQueue.cpp
+    src/ThreadPool.cpp
+    src/RequestParser.cpp
+    src/RequestHandler.cpp
 )
+
     #创建一个可执行文件，并告诉 CMake，这个可执行文件由哪些源文件编译得到
 
 target_include_directories(tcp_server PRIVATE

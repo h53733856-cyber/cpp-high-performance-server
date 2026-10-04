@@ -2,10 +2,12 @@
 #define SERVER_H
 
 #include "Connection.h"
+#include "ThreadPool.h"
 
 #include <sys/epoll.h>
 #include <unordered_map>
 #include <vector>
+#include <string>
 
 //负责创建监听socket、epoll实例、接受新连接、分发IO事件、管理所有客户端连接
 class Server {
@@ -39,12 +41,23 @@ private:
     //处理一个 epoll 事件
     void handle_event(const epoll_event& event);
 
+    // 把请求提交给线程池
+    void submit_requests(
+        int client_fd,
+        const std::vector<std::string>& requests
+    );
+
+
 private:
     int listen_fd_;
     int epoll_fd_;
 
     //每一个客户端 fd 对应一个 Connection
     std::unordered_map<int, Connection> connections_;
+
+    // 工作线程池
+    ThreadPool thread_pool_;
+
     // 一次epoll_wait最多返回多少就绪事件
     static constexpr int MAX_EVENTS = 1024;
 };

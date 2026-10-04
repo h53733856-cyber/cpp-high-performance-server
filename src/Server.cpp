@@ -1,4 +1,5 @@
 #include "Server.h"
+#include "RequestHandler.h"
 
 #include <iostream>
 #include <sys/socket.h>
@@ -12,7 +13,8 @@
 //构造函数：初始化fd为-1，代表无效
 Server::Server()
     : listen_fd_(-1),
-      epoll_fd_(-1)
+      epoll_fd_(-1),
+      thread_pool_(4)
 {
 }
 
@@ -251,6 +253,33 @@ void Server::update_events(int client_fd)
     }
 }
 
+
+void Server::submit_requests(int client_fd, const std::vector<std::string>& requests)
+{
+    for (const std::string& request : requests) {
+
+        thread_pool_.submit(
+            [client_fd, request]() {
+
+                RequestHandler handler;
+
+                std::string response =
+                    handler.process_request(request);
+
+                // Step 4 暂时只验证 Worker 正确执行了业务。
+                //
+                // 现在还不能直接 send()。
+                // Worker 不允许操作 Connection 或 epoll。
+                //
+                // Step 5 会通过 CompletionQueue + eventfd
+                // 把 response 返回给 I/O 线程。
+                std::cout << "[worker] client " << client_fd << " request: "
+                    << request << " response: " << response << std::endl;
+            }
+        );
+    }
+}
+
 void Server::close_client(int client_fd)
 {
     //从epoll中删除这个客户端
@@ -305,22 +334,23 @@ void Server::handle_event(const epoll_event& event)
 
     //客户端socket可读
     if (event_flags & EPOLLIN) {
+        std::vector<std::string> requests;
+
         //处理客户端发送过来的数据
-        if (!connection.handle_read()) {
+        if (!connection.handle_read(requests)) {
             close_client(fd);
             return;
         }
 
-        //收到数据之后立即尝试发送
-        if (connection.has_pending_data()) {
-            if (!connection.handle_write()) {
-                close_client(fd);
-                return;
-            }
+        // 把完整请求提交给 Worker
+        if (!requests.empty()) {
+            submit_requests(fd, requests);
         }
 
         //根据当前输出缓冲区状态
         //决定下一次epoll应该监听什么事件
+        // Step 4 暂时没有 Worker -> I/O 的结果返回，
+        // 所以这里不再立即 send
         update_events(fd);
     }
 

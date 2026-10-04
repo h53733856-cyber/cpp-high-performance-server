@@ -31,7 +31,7 @@ bool Connection::has_pending_data() const
 }
 
 //处理EPOLLIN
-bool Connection::handle_read()
+bool Connection::handle_read(std::vector<std::string>& requests)
 {
     char buffer[1024];
 
@@ -39,13 +39,22 @@ bool Connection::handle_read()
         ssize_t n = recv(client_fd_, buffer, sizeof(buffer), 0);
 
         if (n > 0) {
-            // 打印客户端发送过来的数据
-            std::cout.write(buffer, n);
-            std::cout.flush();
+            // 把收到的数据交给请求解析器
+            request_parser_.append(
+                std::string(buffer, n)
+            );
 
-            // 把收到的数据放入输出缓冲区
-            // 后面统一通过非阻塞send发送给客户端
-            output_buffer_.data.append(buffer, n);
+            // 一次 recv 可能包含：
+            // 1. 半个请求
+            // 2. 一个请求
+            // 3. 多个请求
+            //
+            // 所以需要不断提取完整请求
+            std::string request;
+
+            while (request_parser_.next_request(request)) {
+                requests.push_back(std::move(request));
+            }
 
             continue;
         }

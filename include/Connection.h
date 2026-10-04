@@ -1,7 +1,10 @@
 #ifndef CONNECTION_H
 #define CONNECTION_H
 
+#include "RequestParser.h"
+
 #include <string>
+#include <vector>
 
 //connection类：封装单个客户端连接，管理客户端socket，读缓冲区，写输出缓冲区
 class Connection {
@@ -22,7 +25,7 @@ public:
     // 处理客户端的可读事件
     // 返回 true：连接仍然有效
     // 返回 false：连接已经断开或者发生错误
-    bool handle_read();
+    bool handle_read(std::vector<std::string>& requests);
 
     // 处理客户端的可写事件
     // 返回 true：连接仍然有效
@@ -42,6 +45,8 @@ private:
     };
 
     int client_fd_;
+    // 请求解析器
+    RequestParser request_parser_;
     OutputBuffer output_buffer_;
 };
 
