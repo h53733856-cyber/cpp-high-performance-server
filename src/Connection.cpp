@@ -11,6 +11,7 @@ Connection::Connection(int fd)
 {
 }
 
+// 析构函数：销毁连接时关闭socket，防止文件描述符泄漏
 Connection::~Connection()
 {
     if (client_fd_ != -1) {
@@ -23,11 +24,13 @@ int Connection::fd() const
     return client_fd_;
 }
 
+// 判断输出缓冲区是否还有数据待发送
 bool Connection::has_pending_data() const
-{
+{   // offset < data.size()：说明还有字节没发出去
     return output_buffer_.offset < output_buffer_.data.size();
 }
 
+//处理EPOLLIN
 bool Connection::handle_read()
 {
     char buffer[1024];
@@ -73,12 +76,14 @@ bool Connection::handle_read()
     return true;
 }
 
+//处理EPOLLOUT
 bool Connection::handle_write()
 {
     while (output_buffer_.offset < output_buffer_.data.size()) {
+        //找到待发送数据起始地址：缓冲区起始 + 已经发送的偏移量
         const char* data =
             output_buffer_.data.data() + output_buffer_.offset;
-
+        //本次还剩下多少字节未发送
         size_t remaining =
             output_buffer_.data.size() - output_buffer_.offset;
 

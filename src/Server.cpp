@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <fcntl.h>
 
+//构造函数：初始化fd为-1，代表无效
 Server::Server()
     : listen_fd_(-1),
       epoll_fd_(-1)
@@ -16,11 +17,11 @@ Server::Server()
 }
 
 Server::~Server()
-{
+{   //epoll_fd有效就关闭epoll实例
     if (epoll_fd_ != -1) {
         close(epoll_fd_);
     }
-
+    //监听fd有效就关闭监听socket
     if (listen_fd_ != -1) {
         close(listen_fd_);
     }
@@ -28,14 +29,12 @@ Server::~Server()
 
 bool Server::set_nonblocking(int fd)
 {
-    //获取当前 fd 的文件状态标志
+    //fcntl:获取当前 fd 的文件状态标志
     int flags = fcntl(fd, F_GETFL, 0);
 
     if (flags == -1) {
         std::cerr << "fcntl F_GETFL failed for fd "
-                  << fd
-                  << ": "
-                  << std::strerror(errno)
+                  << fd << ": " << std::strerror(errno)
                   << std::endl;
 
         return false;
@@ -59,8 +58,7 @@ bool Server::init()
 {
     //忽略SIGPIPE
     //如果对端已经关闭连接，而我们仍然调用send()
-    //系统可能产生SIGPIPE信号
-    //默认情况下SIGPIPE会终止整个进程
+    //系统可能产生SIGPIPE信号，默认情况下SIGPIPE会终止整个进程
     //这里把SIGPIPE设置为忽略
     signal(SIGPIPE, SIG_IGN);
 
@@ -75,7 +73,7 @@ bool Server::init()
         return false;
     }
 
-    //2. bind
+    //2. bind绑定地址端口
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(8080);
@@ -93,7 +91,7 @@ bool Server::init()
         return false;
     }
 
-    //3. listen
+    //3. listen开始监听，第二个参数是挂起连接队列长度
     if (listen(listen_fd_, 10) == -1) {
         std::cerr << "listen failed: "
                   << std::strerror(errno)
@@ -180,6 +178,7 @@ void Server::accept_new_connection()
         }
 
         //创建这个客户端对应的Connection
+        //key=client_fd，value用client_fd构造Connection
         auto [it, inserted] =
             connections_.try_emplace(client_fd, client_fd);
 
@@ -192,7 +191,7 @@ void Server::accept_new_connection()
             continue;
         }
 
-        //把客户端socket加入epoll
+        //把客户端socket加入epoll，初始只监听EPOLLIN可读事件
         epoll_event client_event{};
         client_event.events = EPOLLIN;
         client_event.data.fd = client_fd;
@@ -213,6 +212,7 @@ void Server::accept_new_connection()
     }
 }
 
+//更新epoll监听事件：根据缓冲区是否有待发数据，动态选择EPOLLIN 或者 EPOLLIN|EPOLLOUT
 void Server::update_events(int client_fd)
 {
     auto it = connections_.find(client_fd);
@@ -270,9 +270,7 @@ void Server::close_client(int client_fd)
         connections_.erase(it);
     }
 
-    std::cout << "client closed: "
-              << client_fd
-              << std::endl;
+    std::cout << "client closed: " << client_fd << std::endl;
 }
 
 void Server::handle_event(const epoll_event& event)

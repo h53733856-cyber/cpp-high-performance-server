@@ -18,3 +18,36 @@ add_executable(tcp_server
 target_include_directories(tcp_server PRIVATE
     ${PROJECT_SOURCE_DIR}/include
 )
+
+
+add_executable(thread_pool_test
+    tests/ThreadPoolTest.cpp
+    src/ThreadPool.cpp
+    src/TaskQueue.cpp
+)
+
+target_include_directories(thread_pool_test
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
+)
+
+
+add_executable(request_parser_test
+    tests/RequestParserTest.cpp
+    src/RequestParser.cpp
+)
+
+target_include_directories(request_parser_test
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
+)
+
+add_executable(request_handler_test
+    tests/RequestHandlerTest.cpp
+    src/RequestHandler.cpp
+)
+
+target_include_directories(request_handler_test
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
+)
