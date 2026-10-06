@@ -9,21 +9,39 @@
 #include <cstring>
 #include <signal.h>
 #include <fcntl.h>
+#include <sys/eventfd.h>
+#include <cstdint>
 
 //构造函数：初始化fd为-1，代表无效
 Server::Server()
     : listen_fd_(-1),
       epoll_fd_(-1),
+      completion_queue_(),
+      completion_event_fd_(-1),
+      next_connection_id_(1),
       thread_pool_(4)
 {
 }
 
 Server::~Server()
-{   //epoll_fd有效就关闭epoll实例
+{
+    // 先停止 Worker
+    // 确保 Worker 不会再访问 completion_queue_
+    // 和 completion_event_fd_
+    thread_pool_.shutdown();
+
+    // Worker 已经全部停止后，
+    // 才可以关闭 eventfd
+    if (completion_event_fd_ != -1) {
+        close(completion_event_fd_);
+    }
+
+    // 关闭 epoll 实例
     if (epoll_fd_ != -1) {
         close(epoll_fd_);
     }
-    //监听fd有效就关闭监听socket
+
+    // 关闭监听 socket
     if (listen_fd_ != -1) {
         close(listen_fd_);
     }
@@ -136,8 +154,45 @@ bool Server::init()
         return false;
     }
 
+    // 7. 创建 eventfd
+    // Worker 完成任务后通过 eventfd 唤醒 I/O 线程
+    completion_event_fd_ = eventfd(
+        0,
+        EFD_NONBLOCK | EFD_CLOEXEC
+    );
+
+    if (completion_event_fd_ == -1) {
+        std::cerr << "eventfd failed: "
+                << std::strerror(errno)
+                << std::endl;
+
+        return false;
+    }
+
+    // 8. 把 eventfd 加入 epoll
+    epoll_event completion_event{};
+    completion_event.events = EPOLLIN;
+    completion_event.data.fd = completion_event_fd_;
+
+    if (epoll_ctl(
+            epoll_fd_,
+            EPOLL_CTL_ADD,
+            completion_event_fd_,
+            &completion_event) == -1) {
+
+        std::cerr
+            << "epoll_ctl ADD completion_event_fd failed: "
+            << std::strerror(errno)
+            << std::endl;
+
+        return false;
+    }
+
     return true;
 }
+
+
+
 
 void Server::accept_new_connection()
 {
@@ -169,9 +224,6 @@ void Server::accept_new_connection()
             break;
         }
 
-        std::cout << "new client connected: "
-                  << client_fd
-                  << std::endl;
 
         //客户端socket也必须设置为非阻塞
         if (!set_nonblocking(client_fd)) {
@@ -181,13 +233,26 @@ void Server::accept_new_connection()
 
         //创建这个客户端对应的Connection
         //key=client_fd，value用client_fd构造Connection
+        // auto [it, inserted] =
+        //     connections_.try_emplace(client_fd, client_fd);
+
+        std::uint64_t connection_id = next_connection_id_++;
+
+        std::cout << "[connection] connected: fd="
+                    << client_fd
+                    << ", id="
+                    << connection_id
+                    << std::endl;
+
         auto [it, inserted] =
-            connections_.try_emplace(client_fd, client_fd);
+            connections_.try_emplace(client_fd,client_fd,connection_id);
 
         if (!inserted) {
-            std::cerr << "failed to create Connection for client "
-                      << client_fd
-                      << std::endl;
+            std::cout << "new client connected: "
+                    << client_fd
+                    << ", connection_id: "
+                    << connection_id
+                    << std::endl;
 
             close(client_fd);
             continue;
@@ -254,31 +319,142 @@ void Server::update_events(int client_fd)
 }
 
 
-void Server::submit_requests(int client_fd, const std::vector<std::string>& requests)
+void Server::submit_requests(int client_fd, std::uint64_t connection_id, const std::vector<std::string>& requests)
 {
     for (const std::string& request : requests) {
-
         thread_pool_.submit(
-            [client_fd, request]() {
+            [this, client_fd, connection_id, request]() {
 
                 RequestHandler handler;
 
-                std::string response =
-                    handler.process_request(request);
+                std::cout << "[worker] processing request: "
+                            << request
+                            << std::endl;
 
-                // Step 4 暂时只验证 Worker 正确执行了业务。
-                //
-                // 现在还不能直接 send()。
-                // Worker 不允许操作 Connection 或 epoll。
-                //
-                // Step 5 会通过 CompletionQueue + eventfd
-                // 把 response 返回给 I/O 线程。
-                std::cout << "[worker] client " << client_fd << " request: "
-                    << request << " response: " << response << std::endl;
+                std::string response = handler.process_request(request);
+
+                std::cout << "[worker] response: " << response
+                        << std::endl;
+                // 网络协议要求每个响应以 '\n' 结尾。
+                if (response.empty() ||
+                    response.back() != '\n') {
+                    response.push_back('\n');
+                }
+
+                // Worker 只负责产生结果，
+                // 不直接操作 Connection，也不直接 send。
+                Completion completion{
+                    client_fd,
+                    connection_id,
+                    std::move(response)
+                };
+
+
+                std::cout << "[completion] result queued: fd="
+                            << client_fd
+                            << ", id="
+                            << connection_id
+                            << std::endl;
+
+                // 把 Worker 的结果放入完成队列
+                completion_queue_.push(std::move(completion));
+
+                // 通知 I/O 线程：
+                // CompletionQueue 中有新的结果可以处理了。
+                std::uint64_t value = 1;
+
+                ssize_t n = write(
+                    completion_event_fd_,
+                    &value,
+                    sizeof(value)
+                );
+
+                if (n == -1 &&
+                    errno != EAGAIN &&
+                    errno != EINTR) {
+
+                    std::cerr
+                        << "write completion eventfd failed: "
+                        << std::strerror(errno)
+                        << std::endl;
+                }
             }
         );
     }
 }
+
+void Server::handle_completion_event()
+{
+    std::uint64_t value = 0;
+
+    // 读取 eventfd，消费通知
+    ssize_t n = read(
+        completion_event_fd_,
+        &value,
+        sizeof(value)
+    );
+
+    if (n == -1) {
+        if (errno == EINTR) {
+            return;
+        }
+
+        if (errno != EAGAIN &&
+            errno != EWOULDBLOCK) {
+
+            std::cerr
+                << "read completion eventfd failed: "
+                << std::strerror(errno)
+                << std::endl;
+        }
+    }
+
+    // eventfd 只负责“通知”
+    // 真正的结果保存在 CompletionQueue 中。
+    Completion completion;
+
+    while (completion_queue_.try_pop(completion)) {
+
+        auto it = connections_.find(completion.client_fd);
+
+        // 客户端已经断开
+        if (it == connections_.end()) {
+            continue;
+        }
+
+        Connection& connection = it->second;
+
+        // fd 可能已经被新的客户端复用。
+        //
+        // 如果 connection_id 不一致，
+        // 说明这个 completion 属于旧连接，
+        // 不能发送给当前连接。
+        if (connection.connection_id() != completion.connection_id) {
+            std::cout << "[completion] connection_id mismatch: fd="
+                    << completion.client_fd
+                    << " completion_id=" << completion.connection_id
+                    << " current_id=" << connection.connection_id()
+                    << std::endl;
+            continue;
+        }
+
+        //这个结果确实属于当前有效链接，并且现在正式交给I/O线程处理
+        std::cout << "[completion] result received: fd="
+                << completion.client_fd
+                << ", id="
+                << completion.connection_id
+                << std::endl;
+
+        // 把 Worker 的结果放入 Connection 的发送缓冲区
+        connection.append_response(
+            completion.response
+        );
+
+        // 有数据需要发送，所以让 epoll 监听 EPOLLOUT
+        update_events(completion.client_fd);
+    }
+}
+
 
 void Server::close_client(int client_fd)
 {
@@ -293,19 +469,38 @@ void Server::close_client(int client_fd)
     auto it = connections_.find(client_fd);
 
     if (it != connections_.end()) {
+        std::uint64_t connection_id = it->second.connection_id();
+        
+         epoll_ctl(
+            epoll_fd_,
+            EPOLL_CTL_DEL,
+            client_fd,
+            nullptr
+        );
+        
         //删除这个客户端对应的Connection
         //Connection析构时会关闭socket
         //同时它内部的输出缓冲区也会一起释放
         connections_.erase(it);
-    }
 
-    std::cout << "client closed: " << client_fd << std::endl;
+        std::cout << "[connection] closed: fd="
+              << client_fd
+              << ", id="
+              << connection_id
+              << std::endl;
+    }
 }
 
 void Server::handle_event(const epoll_event& event)
 {
     int fd = event.data.fd;
     uint32_t event_flags = event.events;
+
+    // Worker 完成任务后，eventfd 会触发 EPOLLIN
+    if (fd == completion_event_fd_) {
+        handle_completion_event();
+        return;
+    }
 
     //监听socket发生EPOLLIN
     //说明有新的客户端连接到来
@@ -344,7 +539,11 @@ void Server::handle_event(const epoll_event& event)
 
         // 把完整请求提交给 Worker
         if (!requests.empty()) {
-            submit_requests(fd, requests);
+            submit_requests(
+                fd,
+                connection.connection_id(),
+                requests
+            );
         }
 
         //根据当前输出缓冲区状态

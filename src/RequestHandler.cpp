@@ -2,6 +2,9 @@
 
 #include <sstream>
 #include <stdexcept>
+#include <thread>
+#include <chrono>
+#include <iostream>
 
 std::string RequestHandler::process_request(const std::string& request)
 {
@@ -45,5 +48,25 @@ std::string RequestHandler::process_request(const std::string& request)
         return std::to_string(a + b);
     }
 
+    if (command == "SLEEP") {
+        int milliseconds;
+
+        if (!(stream >> milliseconds) || milliseconds < 0) {
+            return "ERROR\n";
+        }
+
+        std::cout << "[worker] SLEEP start: "
+                << milliseconds << " ms"
+                << std::endl;
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(milliseconds)
+        );
+
+        std::cout << "[worker] SLEEP finish"
+                << std::endl;
+
+        return "OK\n";
+    }
     return "ERROR\n";
 }

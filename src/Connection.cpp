@@ -6,8 +6,12 @@
 #include <cerrno>
 #include <cstring>
 
-Connection::Connection(int fd)
-    : client_fd_(fd)
+Connection::Connection(
+    int fd,
+    std::uint64_t connection_id
+)
+    : client_fd_(fd),
+      connection_id_(connection_id)
 {
 }
 
@@ -22,6 +26,16 @@ Connection::~Connection()
 int Connection::fd() const
 {
     return client_fd_;
+}
+
+std::uint64_t Connection::connection_id() const
+{
+    return connection_id_;
+}
+
+void Connection::append_response(const std::string& response)
+{
+    output_buffer_.data += response;
 }
 
 // 判断输出缓冲区是否还有数据待发送
@@ -129,6 +143,10 @@ bool Connection::handle_write()
     // 所有数据都已经发送完成
     output_buffer_.data.clear();
     output_buffer_.offset = 0;
+
+    std::cout << "[write] response sent: fd="
+          << client_fd_
+          << std::endl;
 
     return true;
 }

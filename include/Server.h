@@ -3,7 +3,9 @@
 
 #include "Connection.h"
 #include "ThreadPool.h"
+#include "CompletionQueue.h"
 
+#include <cstdint>
 #include <sys/epoll.h>
 #include <unordered_map>
 #include <vector>
@@ -41,9 +43,13 @@ private:
     //处理一个 epoll 事件
     void handle_event(const epoll_event& event);
 
+    // 处理 Worker 完成事件
+    void handle_completion_event();
+
     // 把请求提交给线程池
     void submit_requests(
         int client_fd,
+        std::uint64_t connection_id,
         const std::vector<std::string>& requests
     );
 
@@ -54,6 +60,15 @@ private:
 
     //每一个客户端 fd 对应一个 Connection
     std::unordered_map<int, Connection> connections_;
+
+    // Worker 完成任务后的结果队列
+    CompletionQueue completion_queue_;
+
+    // 用于唤醒 I/O 线程的 eventfd
+    int completion_event_fd_;
+
+    // 连接唯一 ID，用于防止 fd 复用导致结果发错连接
+    std::uint64_t next_connection_id_;
 
     // 工作线程池
     ThreadPool thread_pool_;

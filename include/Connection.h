@@ -4,13 +4,17 @@
 #include "RequestParser.h"
 
 #include <string>
+#include <cstdint>
 #include <vector>
 
 //connection类：封装单个客户端连接，管理客户端socket，读缓冲区，写输出缓冲区
 class Connection {
 public:
     // 构造函数：传入客户端socket fd，explicit防止隐式类型转换
-    explicit Connection(int fd);
+    Connection(
+        int fd,
+        std::uint64_t connection_id
+    );
     // 析构函数：负责关闭客户端socket，释放资源
     ~Connection();
 
@@ -22,6 +26,8 @@ public:
     // 获取客户端 fd，const表示不修改对象状态
     int fd() const;
 
+    std::uint64_t connection_id() const;
+
     // 处理客户端的可读事件
     // 返回 true：连接仍然有效
     // 返回 false：连接已经断开或者发生错误
@@ -31,6 +37,9 @@ public:
     // 返回 true：连接仍然有效
     // 返回 false：发送发生错误
     bool handle_write();
+
+    // 把响应追加到输出缓冲区
+    void append_response(const std::string& response);
 
     // 判断当前是否还有数据没有发送完
     bool has_pending_data() const;
@@ -45,6 +54,8 @@ private:
     };
 
     int client_fd_;
+    std::uint64_t connection_id_;
+
     // 请求解析器
     RequestParser request_parser_;
     OutputBuffer output_buffer_;

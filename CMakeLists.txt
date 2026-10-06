@@ -16,12 +16,24 @@ add_executable(tcp_server
     src/ThreadPool.cpp
     src/RequestParser.cpp
     src/RequestHandler.cpp
+    src/CompletionQueue.cpp
 )
 
     #创建一个可执行文件，并告诉 CMake，这个可执行文件由哪些源文件编译得到
 
 target_include_directories(tcp_server PRIVATE
     ${PROJECT_SOURCE_DIR}/include
+)
+
+
+add_executable(task_queue_test
+    tests/TaskQueueTest.cpp
+    src/TaskQueue.cpp
+)
+
+target_include_directories(task_queue_test
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
 )
 
 
