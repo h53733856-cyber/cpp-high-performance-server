@@ -146,7 +146,7 @@ bool Connection::handle_write()
 
     std::cout << "[write] response sent: fd="
           << client_fd_
-          << std::endl;
+          << std::endl<<'\n';
 
     return true;
 }

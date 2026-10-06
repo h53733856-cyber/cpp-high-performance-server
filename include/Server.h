@@ -10,11 +10,12 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
+#include <cstddef>
 
 //负责创建监听socket、epoll实例、接受新连接、分发IO事件、管理所有客户端连接
 class Server {
 public:
-    Server();
+    explicit Server(std::size_t worker_count);
     ~Server();
 
     // 初始化服务器

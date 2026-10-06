@@ -13,13 +13,13 @@
 #include <cstdint>
 
 //构造函数：初始化fd为-1，代表无效
-Server::Server()
+Server::Server(std::size_t worker_count)
     : listen_fd_(-1),
       epoll_fd_(-1),
       completion_queue_(),
       completion_event_fd_(-1),
       next_connection_id_(1),
-      thread_pool_(4)
+      thread_pool_(worker_count)
 {
 }
 

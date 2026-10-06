@@ -68,5 +68,33 @@ std::string RequestHandler::process_request(const std::string& request)
 
         return "OK\n";
     }
+    
+    if (command == "PRIME") {
+        int n;
+
+        if (!(stream >> n) || n < 2) {
+            return "ERROR\n";
+        }
+
+        int count = 0;
+
+        for (int i = 2; i <= n; ++i) {
+            bool is_prime = true;
+
+            for (int j = 2; j * j <= i; ++j) {
+                if (i % j == 0) {
+                    is_prime = false;
+                    break;
+                }
+            }
+
+            if (is_prime) {
+                ++count;
+            }
+        }
+
+        return std::to_string(count);
+    }
+    
     return "ERROR\n";
 }

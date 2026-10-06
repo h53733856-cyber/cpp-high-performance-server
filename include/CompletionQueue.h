@@ -1,3 +1,4 @@
+#pragma once
 #ifndef COMPLETION_QUEUE_H
 #define COMPLETION_QUEUE_H
 
